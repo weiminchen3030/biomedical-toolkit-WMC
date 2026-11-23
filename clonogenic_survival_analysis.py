@@ -188,7 +188,15 @@ def parse_block_format(raw_df: pd.DataFrame) -> pd.DataFrame:
 
     if not records:
         raise ValueError("Could not locate any valid clonogenic blocks in the input file.")
-    return pd.DataFrame(records)
+    df_out = pd.DataFrame(records)
+    # Auto-detect when col 1 of block header holds Genotype (e.g. WT/FDX1/KO) and col 0 holds Drug (e.g. DSF/ES/ZnPT/NSC)
+    geno_tokens = {"wt", "ko", "kd", "fdx1", "fdx1-/-", "dna-pkcs-/-", "ev", "ctrl", "control"}
+    u_drugs = {str(x).strip().lower() for x in df_out["Drug"].unique()}
+    u_grps = {str(x).strip().lower() for x in df_out["Group"].unique()}
+    if (u_drugs & geno_tokens) and not (u_grps & geno_tokens):
+        df_out = df_out.rename(columns={"Drug": "Group", "Group": "Drug"})
+    df_out["Group"] = df_out["Group"].astype(str).str.strip().replace({"wt": "WT", "Wt": "WT"})
+    return df_out
 
 
 def parse_tidy_format(path: str, sheet: Optional[str] = None) -> pd.DataFrame:
