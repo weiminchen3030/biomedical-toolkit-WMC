@@ -36,10 +36,12 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import curve_fit, lsq_linear
 
-# Enforce editable vector fonts even if standalone
+# Enforce editable vector Arial fonts even if standalone
 matplotlib.rcParams["svg.fonttype"] = "none"
 matplotlib.rcParams["pdf.fonttype"] = 42
 matplotlib.rcParams["ps.fonttype"] = 42
+matplotlib.rcParams["font.family"] = "sans-serif"
+matplotlib.rcParams["font.sans-serif"] = ["Arial"]
 
 # Discover shared plotting & pzfx helpers when available
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -627,7 +629,12 @@ def plot_clonogenic_panel(
     ax.set_ylabel("Surviving fraction")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.legend(frameon=False, loc="lower left", fontsize=5.8)
+    tick_sz = matplotlib.rcParams.get("ytick.labelsize", 7.0)
+    try:
+        tick_pt = float(tick_sz)
+    except (TypeError, ValueError):
+        tick_pt = 7.0
+    ax.legend(frameon=False, loc="lower left", fontsize=tick_pt + 1.0)
 
 
 def parse_args() -> argparse.Namespace:
@@ -699,6 +706,8 @@ def main() -> None:
 
     if HAS_STYLE_PRESETS:
         apply_publication_style(journal=args.journal, palette="okabe_ito")
+    matplotlib.rcParams["font.family"] = "sans-serif"
+    matplotlib.rcParams["font.sans-serif"] = ["Arial"]
 
     # Individual publication plots per (Cell_Line, Drug)
     pairs = list(df_sum.groupby(["Cell_Line", "Drug"], sort=False))

@@ -154,7 +154,7 @@ p_km <- ggsurvplot(
   title = plot_title,
   legend.title = "",
   legend.labs = levels(d$.group),
-  ggtheme = theme_classic(base_size = 12) +
+  ggtheme = theme_classic(base_size = 12, base_family = "Arial") +
     theme(
       plot.title = element_text(face = "bold", hjust = 0.5, size = 13),
       axis.title = element_text(face = "bold", size = 11),
