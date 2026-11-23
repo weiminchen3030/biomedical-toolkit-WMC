@@ -557,26 +557,27 @@ def _auto_ymin(
     user_ymin: Optional[float] = None,
 ) -> float:
     """
-    Select a clean log10 Y-axis lower bound from both positive data points and
-    predicted survival curves, leaving headroom above the bottom-left legend.
+    Select a clean log10 Y-axis lower bound anchored to both observed positive points
+    and predicted survival curves (clamping curve-driven floor at 0.008 unless actual
+    observed data falls below 0.01).
     """
-    vals: List[float] = []
-    if len(pos_vals) > 0:
-        vals.append(float(np.min(pos_vals)) * 0.35)
+    min_pos = float(np.min(pos_vals)) if len(pos_vals) > 0 else 0.01
+    anchor = min_pos * 0.75
+
     if fit_vals is not None and len(fit_vals) > 0:
-        # Consider predicted curve values above practical 0.001 floor so ultra-steep curves don't collapse axis
-        usable_fit = fit_vals[np.isfinite(fit_vals) & (fit_vals >= 0.001)]
+        usable_fit = fit_vals[np.isfinite(fit_vals) & (fit_vals >= 0.008)]
         if len(usable_fit) > 0:
-            vals.append(float(np.min(usable_fit)) * 0.70)
+            fit_anchor = float(np.min(usable_fit)) * 0.80
+            anchor = min(anchor, fit_anchor)
 
-    if not vals:
-        return float(user_ymin) if user_ymin is not None else 0.008
+    # Do not stretch below 0.008 solely due to steep extrapolated curves when observed data >= 0.01
+    if min_pos >= 0.01:
+        anchor = max(anchor, 0.008)
 
-    target = min(vals)
-    candidates = [0.10, 0.05, 0.02, 0.01, 0.008, 0.005, 0.002, 0.001, 0.0005]
+    candidates = [0.10, 0.05, 0.02, 0.008, 0.005, 0.002, 0.001, 0.0005]
     auto_val = 0.0005
     for c in candidates:
-        if c <= target:
+        if c <= anchor:
             auto_val = c
             break
     if user_ymin is not None:
