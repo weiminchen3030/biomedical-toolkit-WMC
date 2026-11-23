@@ -551,6 +551,34 @@ def _format_dose_val(val: float, max_dose: float) -> str:
     return f"{val:.2f}"
 
 
+def _auto_ymin(pos_vals: np.ndarray, user_ymin: Optional[float] = None) -> float:
+    """Select a clean log10 Y-axis lower bound below the smallest positive SF value."""
+    if len(pos_vals) == 0:
+        return float(user_ymin) if user_ymin is not None else 0.008
+    min_pos = float(np.min(pos_vals))
+    target = min_pos * 0.60
+    candidates = [0.10, 0.08, 0.05, 0.02, 0.01, 0.008, 0.005, 0.002, 0.001, 0.0005]
+    auto_val = 0.0005
+    for c in candidates:
+        if c <= target:
+            auto_val = c
+            break
+    if user_ymin is not None:
+        return min(float(user_ymin), auto_val)
+    return auto_val
+
+
+def _fmt_sf_tick(t: float) -> str:
+    """Format surviving fraction Y-axis tick cleanly without duplicate rounded labels."""
+    if t == 0.5:
+        return "0.5"
+    if t >= 0.01:
+        return f"{t:.2f}"
+    if t >= 0.001:
+        return f"{t:.3f}"
+    return f"{t:.4f}"
+
+
 def plot_clonogenic_panel(
     ax: plt.Axes,
     sub_sum: pd.DataFrame,
@@ -559,7 +587,7 @@ def plot_clonogenic_panel(
     unit: str = "nM",
     model: str = "hill",
     palette: str = "classic",
-    ymin: float = 0.008,
+    ymin: Optional[float] = None,
     show_ref_lines: bool = False,
 ) -> None:
     """Plot a SigmaPlot / publication-ready log10 clonogenic survival curve onto ax."""
@@ -569,7 +597,7 @@ def plot_clonogenic_panel(
     d_grid = np.linspace(0.0, max_dose, 300)
 
     pos_vals = sub_sum.loc[sub_sum["SF_Avg"] > 0, "SF_Avg"].values
-    eff_ymin = min(ymin, float(np.min(pos_vals)) * 0.65) if len(pos_vals) else ymin
+    eff_ymin = _auto_ymin(pos_vals, user_ymin=ymin)
     eff_ymax = max(1.8, float(sub_sum["SF_Avg"].max() + sub_sum["SF_Std"].max()) * 1.25)
 
     for idx, grp in enumerate(groups):
@@ -628,9 +656,12 @@ def plot_clonogenic_panel(
     ax.set_ylim(eff_ymin, eff_ymax)
     ax.set_xlim(-max_dose * 0.03, max_dose * 1.04)
 
-    ticks = [t for t in (0.001, 0.005, 0.01, 0.05, 0.10, 0.50, 1.00) if eff_ymin * 0.95 <= t <= eff_ymax]
+    ticks = [t for t in (0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.10, 0.50, 1.00) if eff_ymin * 0.95 <= t <= eff_ymax]
+    # Keep tick labels sparse and readable (avoid crowding 0.008/0.01/0.02)
+    if len(ticks) > 7:
+        ticks = [t for t in (0.001, 0.005, 0.01, 0.05, 0.10, 0.50, 1.00) if eff_ymin * 0.95 <= t <= eff_ymax]
     ax.set_yticks(ticks)
-    ax.yaxis.set_major_formatter(mticker.FixedFormatter([f"{t:.2f}" if t != 0.5 else "0.5" for t in ticks]))
+    ax.yaxis.set_major_formatter(mticker.FixedFormatter([_fmt_sf_tick(t) for t in ticks]))
     ax.yaxis.set_minor_formatter(mticker.NullFormatter())
 
     ax.set_xlabel(f"{drug_label} ({unit})")
@@ -642,7 +673,14 @@ def plot_clonogenic_panel(
         tick_pt = float(tick_sz)
     except (TypeError, ValueError):
         tick_pt = 7.0
-    ax.legend(frameon=False, loc="lower left", fontsize=tick_pt + 1.0)
+    ax.legend(
+        frameon=True,
+        facecolor="white",
+        framealpha=0.88,
+        edgecolor="none",
+        loc="best",
+        fontsize=tick_pt + 1.0,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -667,7 +705,7 @@ def parse_args() -> argparse.Namespace:
         help="Color palette (default: classic SigmaPlot black/blue/red).",
     )
     parser.add_argument("--journal", default="nature", help="Publication journal preset (default: nature).")
-    parser.add_argument("--ymin", type=float, default=0.008, help="Lower Y-axis bound on log10 scale (default: 0.008).")
+    parser.add_argument("--ymin", type=float, default=None, help="Optional lower Y-axis bound on log10 scale (default: auto-fit to data).")
     parser.add_argument("--ref-group", default=None, help="Reference group for SER calculation (default: WT or first group).")
     parser.add_argument("--show-ref-lines", action="store_true", help="Draw dashed horizontal lines at SF=0.50 and SF=0.10.")
     parser.add_argument("--export-pzfx", action="store_true", help="Also export GraphPad Prism (.pzfx) XY tables per assay.")
