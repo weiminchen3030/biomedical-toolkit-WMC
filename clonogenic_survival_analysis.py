@@ -551,13 +551,29 @@ def _format_dose_val(val: float, max_dose: float) -> str:
     return f"{val:.2f}"
 
 
-def _auto_ymin(pos_vals: np.ndarray, user_ymin: Optional[float] = None) -> float:
-    """Select a clean log10 Y-axis lower bound below the smallest positive SF value."""
-    if len(pos_vals) == 0:
+def _auto_ymin(
+    pos_vals: np.ndarray,
+    fit_vals: Optional[np.ndarray] = None,
+    user_ymin: Optional[float] = None,
+) -> float:
+    """
+    Select a clean log10 Y-axis lower bound from both positive data points and
+    predicted survival curves, leaving headroom above the bottom-left legend.
+    """
+    vals: List[float] = []
+    if len(pos_vals) > 0:
+        vals.append(float(np.min(pos_vals)) * 0.35)
+    if fit_vals is not None and len(fit_vals) > 0:
+        # Consider predicted curve values above practical 0.001 floor so ultra-steep curves don't collapse axis
+        usable_fit = fit_vals[np.isfinite(fit_vals) & (fit_vals >= 0.001)]
+        if len(usable_fit) > 0:
+            vals.append(float(np.min(usable_fit)) * 0.70)
+
+    if not vals:
         return float(user_ymin) if user_ymin is not None else 0.008
-    min_pos = float(np.min(pos_vals))
-    target = min_pos * 0.60
-    candidates = [0.10, 0.08, 0.05, 0.02, 0.01, 0.008, 0.005, 0.002, 0.001, 0.0005]
+
+    target = min(vals)
+    candidates = [0.10, 0.05, 0.02, 0.01, 0.008, 0.005, 0.002, 0.001, 0.0005]
     auto_val = 0.0005
     for c in candidates:
         if c <= target:
@@ -597,8 +613,14 @@ def plot_clonogenic_panel(
     d_grid = np.linspace(0.0, max_dose, 300)
 
     pos_vals = sub_sum.loc[sub_sum["SF_Avg"] > 0, "SF_Avg"].values
-    eff_ymin = _auto_ymin(pos_vals, user_ymin=ymin)
-    eff_ymax = max(1.8, float(sub_sum["SF_Avg"].max() + sub_sum["SF_Std"].max()) * 1.25)
+    fit_curves = [
+        evaluate_model_curve(sub_fits[sub_fits["Group"] == grp].iloc[0], d_grid, model=model)
+        for grp in groups
+    ]
+    all_fit_vals = np.concatenate(fit_curves) if fit_curves else np.array([])
+    eff_ymin = _auto_ymin(pos_vals, fit_vals=all_fit_vals, user_ymin=ymin)
+    max_fit = float(np.nanmax(all_fit_vals)) if len(all_fit_vals) else 1.0
+    eff_ymax = max(1.8, float(sub_sum["SF_Avg"].max() + sub_sum["SF_Std"].max()) * 1.25, max_fit * 1.15)
 
     for idx, grp in enumerate(groups):
         col = colors[idx % len(colors)]
@@ -674,11 +696,8 @@ def plot_clonogenic_panel(
     except (TypeError, ValueError):
         tick_pt = 7.0
     ax.legend(
-        frameon=True,
-        facecolor="white",
-        framealpha=0.88,
-        edgecolor="none",
-        loc="best",
+        frameon=False,
+        loc="lower left",
         fontsize=tick_pt + 1.0,
     )
 
