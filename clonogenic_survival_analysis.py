@@ -236,6 +236,59 @@ def parse_tidy_format(path: str, sheet: Optional[str] = None) -> pd.DataFrame:
     return melted.dropna(subset=["Colonies"]).reset_index(drop=True)
 
 
+def parse_summary_format(path: str, sheet: Optional[str] = None) -> pd.DataFrame:
+    """Parse pre-aggregated summary CSV/Excel tables with Avg and SD/SEM columns."""
+    ext = Path(path).suffix.lower()
+    if ext in (".xlsx", ".xls"):
+        df = pd.read_excel(path, sheet_name=sheet or 0)
+    else:
+        df = pd.read_csv(path, sep="\t" if ext == ".tsv" else ",")
+
+    col_map = {c.strip().lower(): c for c in df.columns}
+    conc_col = next((col_map[k] for k in ("concentration", "conc", "dose") if k in col_map), None)
+    avg_col = next((col_map[k] for k in ("sf_avg", "sf_mean", "avg", "mean", "sf", "survival") if k in col_map), None)
+    std_col = next((col_map[k] for k in ("sf_std", "sf_sd", "std", "sd", "stdev") if k in col_map), None)
+    sem_col = next((col_map[k] for k in ("sf_sem", "sem") if k in col_map), None)
+    n_col = next((col_map[k] for k in ("n_reps", "n", "reps") if k in col_map), None)
+    if not conc_col or not avg_col:
+        raise ValueError("Summary format requires 'Concentration' (or 'Dose') and 'SF_Avg' (or 'Avg'/'Mean') columns.")
+
+    cell_col = next((col_map[k] for k in ("cell_line", "cellline", "cell") if k in col_map), None)
+    drug_col = next((col_map[k] for k in ("drug", "treatment", "compound") if k in col_map), None)
+    grp_col = next((col_map[k] for k in ("group", "genotype", "condition") if k in col_map), None)
+
+    out = pd.DataFrame({
+        "Cell_Line": df[cell_col].astype(str) if cell_col else "Sample",
+        "Drug": df[drug_col].astype(str) if drug_col else "Treatment",
+        "Group": df[grp_col].astype(str) if grp_col else "Group1",
+        "Concentration": pd.to_numeric(df[conc_col], errors="coerce"),
+        "N_Reps": pd.to_numeric(df[n_col], errors="coerce").fillna(3).astype(int) if n_col else 3,
+        "Plating_Number": np.nan,
+        "Colonies_Mean": np.nan,
+        "PE_0": 1.0,
+        "PE_Avg": np.nan,
+        "SF_Avg": pd.to_numeric(df[avg_col], errors="coerce"),
+    })
+    if std_col:
+        out["SF_Std"] = pd.to_numeric(df[std_col], errors="coerce").fillna(0.0)
+        out["SF_SEM"] = pd.to_numeric(df[sem_col], errors="coerce").fillna(out["SF_Std"] / np.sqrt(out["N_Reps"].clip(lower=1))) if sem_col else (out["SF_Std"] / np.sqrt(out["N_Reps"].clip(lower=1)))
+    elif sem_col:
+        out["SF_SEM"] = pd.to_numeric(df[sem_col], errors="coerce").fillna(0.0)
+        out["SF_Std"] = out["SF_SEM"] * np.sqrt(out["N_Reps"].clip(lower=1))
+    else:
+        out["SF_Std"] = 0.0
+        out["SF_SEM"] = 0.0
+
+    out = out.dropna(subset=["Concentration", "SF_Avg"]).reset_index(drop=True)
+    for col_ord in ("Cell_Line", "Drug", "Group"):
+        order = list(dict.fromkeys(out[col_ord].tolist()))
+        out[col_ord] = pd.Categorical(out[col_ord], categories=order, ordered=True)
+    out = out.sort_values(["Cell_Line", "Drug", "Group", "Concentration"], kind="stable").reset_index(drop=True)
+    for col_ord in ("Cell_Line", "Drug", "Group"):
+        out[col_ord] = out[col_ord].astype(str)
+    return out
+
+
 def load_clonogenic_data(path: str, fmt: str = "auto", sheet: Optional[str] = None) -> pd.DataFrame:
     """Load raw clonogenic colony counts in either multi-block or tidy format."""
     fmt_l = fmt.lower().strip()
@@ -583,7 +636,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--input", required=True, help="Input CSV or Excel file with colony counts.")
     parser.add_argument("--sheet", default=None, help="Optional Excel sheet name.")
-    parser.add_argument("--format", default="auto", choices=["auto", "block", "tidy"], help="Input format parser (default: auto).")
+    parser.add_argument("--format", default="auto", choices=["auto", "block", "tidy", "summary"], help="Input format parser (default: auto).")
     parser.add_argument("--output-dir", default="results/clonogenic_survival", help="Output directory (default: results/clonogenic_survival).")
     parser.add_argument(
         "--model",
@@ -611,8 +664,19 @@ def main() -> None:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    df_raw = load_clonogenic_data(args.input, fmt=args.format, sheet=args.sheet)
-    df_rep, df_sum = compute_surviving_fractions(df_raw)
+    if args.format == "summary":
+        df_sum = parse_summary_format(args.input, sheet=args.sheet)
+        df_rep = df_sum[["Cell_Line", "Drug", "Group", "Concentration", "SF_Avg", "SF_Std", "SF_SEM"]].copy()
+    else:
+        try:
+            df_raw = load_clonogenic_data(args.input, fmt=args.format, sheet=args.sheet)
+            df_rep, df_sum = compute_surviving_fractions(df_raw)
+        except ValueError:
+            if args.format == "auto":
+                df_sum = parse_summary_format(args.input, sheet=args.sheet)
+                df_rep = df_sum[["Cell_Line", "Drug", "Group", "Concentration", "SF_Avg", "SF_Std", "SF_SEM"]].copy()
+            else:
+                raise
     df_fits = fit_all_survival_curves(df_sum, ref_group=args.ref_group)
 
     df_rep.to_csv(out_dir / "clonogenic_replicates_sf.csv", index=False)
